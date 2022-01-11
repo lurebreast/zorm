@@ -59,13 +59,20 @@ func main() {
 	//
 	//rows, err := db.Table("userinfo").Where(user5).Delete()
 
-	user5 := User{
-		Uid: 4,
-		//Username: "EE3",
-		//Departname: "22",
-	}
-	rows, err := db.Table("userinfo").Where(user5).Update(map[string]string{"username": "EE5"})
+	//user6 := User{
+	//	Uid: 4,
+	//	//Username: "EE3",
+	//	//Departname: "22",
+	//}
+	//rows, err := db.Table("userinfo").Where(user6).Update(map[string]string{"username": "EE5"})
+	//fmt.Println(rows, err)
 
-	fmt.Println(rows, err)
+	//user7 := User{
+	//	Uid: 4,
+	//	//Username: "EE3",
+	//	//Departname: "22",
+	//}
+	//result, err := db.Table("userinfo").Where(user7).Select()
+	//fmt.Println(result, err)
 
 }

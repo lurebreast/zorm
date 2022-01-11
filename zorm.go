@@ -3,7 +3,6 @@ package zorm
 import (
 	"database/sql"
 	"errors"
-	"fmt"
 	_ "github.com/go-sql-driver/mysql"
 	"reflect"
 	"runtime"
@@ -153,6 +152,7 @@ func (z *ZormEngine) GetTable() string {
 
 func (z *ZormEngine) ResetZormEngine() *ZormEngine {
 	z.WhereParam = ""
+	z.WhereExec = nil
 	return z
 }
 
@@ -160,9 +160,9 @@ func (z *ZormEngine) ResetZormEngine() *ZormEngine {
 func (z *ZormEngine) Insert(data interface{}) (int64, error) {
 	kind := reflect.ValueOf(data).Kind()
 	if kind == reflect.Struct {
-		return z.insertData(data, "insert")
+		return z.insertData(data, "INSERT")
 	} else if kind == reflect.Array || kind == reflect.Slice {
-		return z.batchInsertData(data, "insert")
+		return z.batchInsertData(data, "INSERT")
 	} else {
 		return 0, errors.New("插入的格式错误，单个为struct, 批量为[]struct")
 	}
@@ -172,22 +172,22 @@ func (z *ZormEngine) Insert(data interface{}) (int64, error) {
 func (z *ZormEngine) Replace(data interface{}) (int64, error) {
 	kind := reflect.ValueOf(data).Kind()
 	if kind == reflect.Struct {
-		return z.insertData(data, "replace")
+		return z.insertData(data, "REPLACE")
 	} else if kind == reflect.Array || kind == reflect.Slice {
-		return z.batchInsertData(data, "replace")
+		return z.batchInsertData(data, "REPLACE")
 	} else {
 		return 0, errors.New("替换插入的格式错误，单个为struct, 批量为[]struct")
 	}
 }
 
 func (z *ZormEngine) Delete() (int64, error) {
-	z.Prepare = "delete from " + z.GetTable()
+	z.Prepare = "DELETE FROM " + z.GetTable()
 	if z.WhereParam != "" {
-		z.Prepare += " where " + z.WhereParam
+		z.Prepare += " WHERE " + z.WhereParam
 	}
 
 	if z.LimitParam != "" {
-		z.Prepare += " limit " + z.LimitParam
+		z.Prepare += " LIMIT " + z.LimitParam
 	}
 
 	var err error
@@ -257,9 +257,9 @@ func (z *ZormEngine) Update(data ...interface{}) (int64, error) {
 		z.UpdateExec = append(z.UpdateExec, data[1])
 	}
 
-	z.Prepare = "update " + z.GetTable() + " set " + z.UpdateParam
+	z.Prepare = "UPDATE " + z.GetTable() + " SET " + z.UpdateParam
 	if z.WhereParam != "" {
-		z.Prepare += " where " + z.WhereParam
+		z.Prepare += " WHERE " + z.WhereParam
 	}
 
 	stmp, err := z.Db.Prepare(z.Prepare)
@@ -273,9 +273,241 @@ func (z *ZormEngine) Update(data ...interface{}) (int64, error) {
 		return 0, z.setErrorInfo(err)
 	}
 
-	fmt.Println(z.Prepare)
-
 	return result.RowsAffected()
+}
+
+// 查询
+func (z *ZormEngine) Select() ([]map[string]string, error)  {
+	z.Prepare = "SELECT " + z.FieldParam + " FROM " + z.GetTable()
+	if z.WhereParam != "" {
+		z.Prepare += " WHERE " + z.WhereParam
+	}
+	if z.LimitParam != "" {
+		z.Prepare += " LIMIT " + z.LimitParam
+	}
+
+	z.AllExec = z.WhereExec
+	rows, err := z.Db.Query(z.Prepare, z.AllExec...)
+	if err != nil {
+		return nil, z.setErrorInfo(err)
+	}
+
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, z.setErrorInfo(err)
+	}
+
+	values := make([][]byte, len(columns))
+	scans := make([]interface{}, len(columns))
+	for i := range values {
+		scans[i] = &values[i]
+	}
+
+	result := make([]map[string]string, 0)
+	for rows.Next() {
+		if err := rows.Scan(scans...); err != nil {
+			return nil, z.setErrorInfo(err)
+		}
+
+		row := make(map[string]string)
+		for k, v := range values {
+			key := columns[k]
+			row[key] = string(v)
+		}
+
+		result = append(result, row)
+	}
+
+	return result, nil
+}
+
+func (z *ZormEngine) SelectOne() (map[string]string, error)  {
+	result, err := z.Limit(1).Select()
+	if err != nil {
+		return nil, z.setErrorInfo(err)
+	}
+
+	return result[0], nil
+}
+
+func (z *ZormEngine) Find(result interface{}) error {
+	z.Prepare = "SELECT " + z.FieldParam + " FROM " + z.GetTable()
+	if z.WhereParam != "" {
+		z.Prepare += " WHERE " + z.WhereParam
+	}
+	if z.LimitParam != "" {
+		z.Prepare += " LIMIT " + z.LimitParam
+	}
+
+	z.AllExec = z.WhereExec
+	rows, err := z.Db.Query(z.Prepare, z.AllExec...)
+
+	//fmt.Printf("prepare %+v allExec %#v\n", z.Prepare, z.AllExec)
+
+	if err != nil {
+		return z.setErrorInfo(err)
+	}
+
+	columns, err := rows.Columns()
+	if err != nil {
+		return z.setErrorInfo(err)
+	}
+
+	values := make([][]byte, len(columns))
+	scans := make([]interface{}, len(columns))
+	for i := range values {
+		scans[i] = &values[i]
+	}
+
+	destSlice := reflect.ValueOf(result).Elem()
+	destType := destSlice.Type().Elem()
+
+	for rows.Next() {
+		if err := rows.Scan(scans...); err != nil {
+			return z.setErrorInfo(err)
+		}
+
+		dest := reflect.New(destType).Elem()
+
+		for k, v := range values {
+			key := columns[k]
+			value := string(v)
+
+			// 遍历结构体
+			for i := 0; i < destType.NumField(); i++ {
+				// 字段
+				var fieldName string
+				sqlTag := destType.Field(i).Tag.Get("sql")
+				if sqlTag != "" {
+					fieldName = strings.Split(sqlTag, ",")[0]
+				} else {
+					fieldName = destType.Field(i).Name
+				}
+
+				// 返回的字段不在结构体中，跳过
+				if key != fieldName {
+					continue
+				}
+
+				// 反射赋值
+				if err := z.reflectSet(dest, i, value); err != nil {
+					return err
+				}
+			}
+		}
+
+		// 追加到结果中
+		destSlice.Set(reflect.Append(destSlice, dest))
+	}
+
+	return nil
+}
+
+// 单条查找
+func (z *ZormEngine) FindOne(result interface{}) error  {
+	//取的原始值
+	dest := reflect.Indirect(reflect.ValueOf(result))
+
+	//new一个类型的切片
+	destSlice := reflect.New(reflect.SliceOf(dest.Type())).Elem()
+
+	//调用
+	if err := z.Limit(1).Find(destSlice.Addr().Interface()); err != nil {
+		return err
+	}
+
+	//判断返回值长度
+	if destSlice.Len() == 0 {
+		return z.setErrorInfo(errors.New("数据未找到"))
+	}
+
+	dest.Set(destSlice.Index(0))
+	return nil
+}
+
+// 总记录数
+func (z *ZormEngine) Count() (int64, error)  {
+	res, err := z.aggregateQuery("COUNT", "*");
+	if err != nil {
+		return 0, z.setErrorInfo(err)
+	}
+
+	s := string(res.([]byte))
+	num, _ := strconv.ParseInt(s, 10, 64)
+
+	return num, nil
+}
+
+//总和
+func (z *ZormEngine) Sum(param string) (string, error) {
+	sum, err := z.aggregateQuery("sum", param)
+	if err != nil {
+		return "0", z.setErrorInfo(err)
+	}
+	return string(sum.([]byte)), nil
+}
+
+func (z *ZormEngine) aggregateQuery(funcName, field string) (interface{}, error) {
+	z.Prepare = "SELECT " + funcName + "(" + field + ") FROM " + z.GetTable()
+	if z.WhereParam != "" {
+		z.Prepare += " WHERE " + z.WhereParam
+	}
+
+	z.AllExec = z.WhereExec
+	var res interface{}
+	if err := z.Db.QueryRow(z.Prepare, z.AllExec...).Scan(&res); err != nil {
+		return nil, z.setErrorInfo(err)
+	}
+
+	return res, nil
+}
+
+func (z *ZormEngine) reflectSet(dest reflect.Value, i int, value string) error {
+	switch dest.Field(i).Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		num, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return err
+		}
+		dest.Field(i).SetInt(num)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		num, err := strconv.ParseUint(value, 10, 64)
+		if err != nil {
+			return err
+		}
+		dest.Field(i).SetUint(num)
+	case reflect.Float32:
+		res, err := strconv.ParseFloat(value, 32)
+		if err != nil {
+			return err
+		}
+		dest.Field(i).SetFloat(res)
+	case reflect.Float64:
+		res, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return err
+		}
+		dest.Field(i).SetFloat(res)
+	case reflect.Bool:
+		res, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		dest.Field(i).SetBool(res)
+	case reflect.String:
+		dest.Field(i).SetString(value)
+	}
+
+	return nil
+}
+
+func (z *ZormEngine) Limit(limit int, offset ...int) *ZormEngine {
+	z.LimitParam = strconv.Itoa(limit)
+	if len(offset) > 0 {
+		z.LimitParam += " offset " + strconv.Itoa(offset[0])
+	}
+
+	return z
 }
 
 func (z *ZormEngine) insertData(data interface{}, insertType string) (int64, error) {
@@ -356,7 +588,7 @@ func (z *ZormEngine) batchInsertData(data interface{}, insertType string) (int64
 
 			sqlTag := typed.Field(j).Tag.Get("sql")
 			if sqlTag != "" {
-				if strings.Contains(sqlTag, "auto_increment") {
+				if strings.Contains(strings.ToLower(sqlTag), "auto_increment") {
 					continue
 				}
 				// 字段只记录第一个
@@ -377,7 +609,7 @@ func (z *ZormEngine) batchInsertData(data interface{}, insertType string) (int64
 		placeholderString = append(placeholderString, "("+strings.Join(placeholder, ", ")+")")
 	}
 
-	z.Prepare = insertType + " into " + z.GetTable() + "(`" + strings.Join(fieldName, "`, `") + "`) values " + strings.Join(placeholderString, ", ")
+	z.Prepare = insertType + " INTO " + z.GetTable() + "(`" + strings.Join(fieldName, "`, `") + "`) VALUES " + strings.Join(placeholderString, ", ")
 	stmp, err := z.Db.Prepare(z.Prepare)
 	if err != nil {
 		return 0, z.setErrorInfo(err)
