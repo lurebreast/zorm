@@ -277,7 +277,7 @@ func (z *ZormEngine) Update(data ...interface{}) (int64, error) {
 }
 
 // 查询
-func (z *ZormEngine) Select() ([]map[string]string, error)  {
+func (z *ZormEngine) Select() ([]map[string]string, error) {
 	z.Prepare = "SELECT " + z.FieldParam + " FROM " + z.GetTable()
 	if z.WhereParam != "" {
 		z.Prepare += " WHERE " + z.WhereParam
@@ -321,7 +321,7 @@ func (z *ZormEngine) Select() ([]map[string]string, error)  {
 	return result, nil
 }
 
-func (z *ZormEngine) SelectOne() (map[string]string, error)  {
+func (z *ZormEngine) SelectOne() (map[string]string, error) {
 	result, err := z.Limit(1).Select()
 	if err != nil {
 		return nil, z.setErrorInfo(err)
@@ -404,7 +404,7 @@ func (z *ZormEngine) Find(result interface{}) error {
 }
 
 // 单条查找
-func (z *ZormEngine) FindOne(result interface{}) error  {
+func (z *ZormEngine) FindOne(result interface{}) error {
 	//取的原始值
 	dest := reflect.Indirect(reflect.ValueOf(result))
 
@@ -426,8 +426,8 @@ func (z *ZormEngine) FindOne(result interface{}) error  {
 }
 
 // 总记录数
-func (z *ZormEngine) Count() (int64, error)  {
-	res, err := z.aggregateQuery("COUNT", "*");
+func (z *ZormEngine) Count() (int64, error) {
+	res, err := z.aggregateQuery("COUNT", "*")
 	if err != nil {
 		return 0, z.setErrorInfo(err)
 	}
@@ -501,13 +501,101 @@ func (z *ZormEngine) reflectSet(dest reflect.Value, i int, value string) error {
 	return nil
 }
 
-func (z *ZormEngine) Limit(limit int, offset ...int) *ZormEngine {
-	z.LimitParam = strconv.Itoa(limit)
-	if len(offset) > 0 {
-		z.LimitParam += " offset " + strconv.Itoa(offset[0])
+// 排序
+func (z *ZormEngine) Order(order string) *ZormEngine {
+	if z.OrderParam != "" {
+		z.OrderParam += ", "
+	}
+	z.OrderParam = order
+	return z
+}
+
+// 限制条数
+// Usage:
+//     Limit(1, 2)
+func (z *ZormEngine) Limit(limit ...int) *ZormEngine {
+	if len(limit) == 1 {
+		z.LimitParam = strconv.Itoa(limit[0])
+	} else if len(limit) == 2 {
+		z.LimitParam = strconv.Itoa(limit[0]) + " OFFSET " + strconv.Itoa(limit[1])
+	} else {
+		panic("参数个数错误")
 	}
 
 	return z
+}
+
+// 生成sql
+func (z *ZormEngine) GetLastSql() string {
+	z.generateSql()
+	return z.Sql
+}
+
+func (z *ZormEngine) generateSql() {
+	z.Sql = z.Prepare
+	for _, v := range z.AllExec {
+		switch v.(type) {
+		case int:
+			z.Sql = strings.Replace(z.Sql, "?", strconv.Itoa(v.(int)), 1)
+		case int64:
+			z.Sql = strings.Replace(z.Sql, "?", strconv.FormatInt(v.(int64), 10), 1)
+		case bool:
+			z.Sql = strings.Replace(z.Sql, "?", strconv.FormatBool(v.(bool)), 1)
+		default:
+			z.Sql = strings.Replace(z.Sql, "?", "'"+v.(string)+"'", 1)
+		}
+	}
+}
+
+func (z *ZormEngine) Exec(query string, args ...interface{}) (int64, error) {
+	var err error
+	var res int64
+	var result sql.Result
+
+	result, err = z.Db.Exec(query, args...)
+	if err != nil {
+		return 0, z.setErrorInfo(err)
+	}
+
+	if strings.Contains(strings.ToLower(query), "insert") {
+		res, err = result.LastInsertId()
+	} else {
+		res, err = result.RowsAffected()
+	}
+
+	return res, err
+}
+
+// 原生sql查询
+func (z *ZormEngine) Query(query string, args ...interface{}) ([]map[string]string, error) {
+	rows, err := z.Db.Query(query, args...)
+	if err != nil {
+		return nil, z.setErrorInfo(err)
+	}
+
+	columns, _ := rows.Columns()
+	values := make([][]byte, len(columns))
+	scans := make([]interface{}, len(columns))
+	for index := range values {
+		scans[index] = &values[index]
+	}
+
+	result := make([]map[string]string, 0)
+	for rows.Next() {
+		if err := rows.Scan(scans...); err != nil {
+			return nil, z.setErrorInfo(err)
+		}
+
+		row := make(map[string]string)
+		for k, v := range values {
+			key := columns[k]
+			row[key] = string(v)
+		}
+
+		result = append(result, row)
+	}
+
+	return result, nil
 }
 
 func (z *ZormEngine) insertData(data interface{}, insertType string) (int64, error) {
