@@ -82,3 +82,18 @@ func TestQuery(t *testing.T) {
 
 	fmt.Printf("res: %#v\n", res)
 }
+
+func TestTransaction(t *testing.T) {
+	if err := db.Begin(); err != nil {
+		t.Error(err)
+	}
+
+	_, err := db.Table("userinfo").Where(User{Uid: 4}).Update(map[string]string{"username": "hehe2"})
+	if err != nil {
+		t.Error(err)
+	}
+
+	if err := db.Commit(); err != nil {
+		t.Error(err)
+	}
+}

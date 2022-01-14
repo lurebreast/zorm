@@ -262,13 +262,20 @@ func (z *ZormEngine) Update(data ...interface{}) (int64, error) {
 		z.Prepare += " WHERE " + z.WhereParam
 	}
 
-	stmp, err := z.Db.Prepare(z.Prepare)
+	var stmt *sql.Stmt
+	var err error
+
+	if z.TransStatus == 1 {
+		stmt, err = z.Tx.Prepare(z.Prepare)
+	} else {
+		stmt, err = z.Db.Prepare(z.Prepare)
+	}
 	if err != nil {
 		return 0, z.setErrorInfo(err)
 	}
 
 	z.AllExec = append(z.UpdateExec, z.WhereExec...)
-	result, err := stmp.Exec(z.AllExec...)
+	result, err := stmt.Exec(z.AllExec...)
 	if err != nil {
 		return 0, z.setErrorInfo(err)
 	}
@@ -552,7 +559,12 @@ func (z *ZormEngine) Exec(query string, args ...interface{}) (int64, error) {
 	var res int64
 	var result sql.Result
 
-	result, err = z.Db.Exec(query, args...)
+	if z.TransStatus == 1 {
+		result, err = z.Db.Exec(query, args...)
+	} else {
+		result, err = z.Tx.Exec(query, args...)
+	}
+
 	if err != nil {
 		return 0, z.setErrorInfo(err)
 	}
@@ -598,6 +610,32 @@ func (z *ZormEngine) Query(query string, args ...interface{}) ([]map[string]stri
 	return result, nil
 }
 
+// 开启事务
+func (z *ZormEngine) Begin() error {
+	tx, err := z.Db.Begin()
+	if err != nil {
+		return z.setErrorInfo(err)
+	}
+
+	z.Tx = tx
+	z.TransStatus = 1
+	return nil
+}
+
+// 提交事务
+func (z *ZormEngine) Commit() error {
+	z.TransStatus = 0
+	err := z.Tx.Commit()
+	return err
+}
+
+// 回滚事务
+func (z *ZormEngine) RollBack() error {
+	z.TransStatus = 0
+	err := z.Tx.Rollback()
+	return err
+}
+
 func (z *ZormEngine) insertData(data interface{}, insertType string) (int64, error) {
 	//反射type和value
 	t := reflect.TypeOf(data)
@@ -631,7 +669,15 @@ func (z *ZormEngine) insertData(data interface{}, insertType string) (int64, err
 
 	z.Prepare = insertType + " into " + z.GetTable() + "(`" + strings.Join(fieldName, "`, `") + "`) value(" + strings.Join(placeholder, ", ") + ")"
 
-	stmt, err := z.Db.Prepare(z.Prepare)
+	var stmt *sql.Stmt
+	var err error
+
+	if z.TransStatus == 1 {
+		stmt, err = z.Db.Prepare(z.Prepare)
+	} else {
+		stmt, err = z.Tx.Prepare(z.Prepare)
+	}
+
 	if err != nil {
 		return 0, z.setErrorInfo(err)
 	}
@@ -698,12 +744,21 @@ func (z *ZormEngine) batchInsertData(data interface{}, insertType string) (int64
 	}
 
 	z.Prepare = insertType + " INTO " + z.GetTable() + "(`" + strings.Join(fieldName, "`, `") + "`) VALUES " + strings.Join(placeholderString, ", ")
-	stmp, err := z.Db.Prepare(z.Prepare)
+
+	var stmt *sql.Stmt
+	var err error
+
+	if z.TransStatus == 1 {
+		stmt, err = z.Db.Prepare(z.Prepare)
+	} else {
+		stmt, err = z.Tx.Prepare(z.Prepare)
+	}
+
 	if err != nil {
 		return 0, z.setErrorInfo(err)
 	}
 
-	result, err := stmp.Exec(z.AllExec...)
+	result, err := stmt.Exec(z.AllExec...)
 	if err != nil {
 		return 0, z.setErrorInfo(err)
 	}
