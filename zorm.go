@@ -560,9 +560,9 @@ func (z *ZormEngine) Exec(query string, args ...interface{}) (int64, error) {
 	var result sql.Result
 
 	if z.TransStatus == 1 {
-		result, err = z.Db.Exec(query, args...)
-	} else {
 		result, err = z.Tx.Exec(query, args...)
+	} else {
+		result, err = z.Db.Exec(query, args...)
 	}
 
 	if err != nil {
